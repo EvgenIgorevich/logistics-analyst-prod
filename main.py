@@ -1,0 +1,74 @@
+import requests
+from bs4 import BeautifulSoup
+import sqlite3
+from datetime import datetime
+import logging
+import re
+
+# --- 1. ЖЕСТКАЯ ПРОПИСКА ДАННЫХ ---
+TELEGRAM_TOKEN = "8753776194:AAHzwXLTApxGh4J_LAgCGLneDcpd8aEnIsg"
+TG_CHAT_ID = "-1004421613528"
+
+NEWS_SOURCES = [
+    {"name": "РБК", "url": "https://www.rbc.ru/tags/?tag=%D0%BB%D0%BE%D0%B3%D0%B8%D1%81%D1%82%D0%B8%D0%BA%D0%B0-%D0%B8-%D1%82%D1%80%D0%B0%D0%BD%D1%81%D0%BF%D0%BE%D1%80%D1%82"},
+    {"name": "Коммерсантъ", "url": "https://www.kommersant.ru/transport"}
+]
+KEYWORDS = ["санкц", "запрет", "ограничение", "таможн", "фрахт", "логист", "поставк", "границ", "перевозк", "контейнер", "дефицит", "эмбарго", "swift"]
+DB_PATH = "/tmp/news.db"
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+conn = sqlite3.connect(DB_PATH)
+cursor = conn.cursor()
+cursor.execute('''CREATE TABLE IF NOT EXISTS news (id INTEGER PRIMARY KEY, url TEXT UNIQUE)'''); conn.commit()
+
+def job():
+    logging.info("=== СТАРТ РАБОТЫ БОТА ===")
+    all_articles = []
+    
+    # Сбор ссылок
+    for source in NEWS_SOURCES:
+        try:
+            r = requests.get(source['url'], timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            soup = BeautifulSoup(r.text, 'html.parser')
+            items = []
+            if "rbc.ru" in source['url']:
+                items = soup.find_all("a", class_="news-feed__item__link"); base = "https://www.rbc.ru"
+            elif "kommersant.ru" in source['url']:
+                divs = soup.find_all("div", class_="article__preview"); items = [{"title": d.find("h2").find("a").get_text(strip=True), "href": d.find("h2").find("a")['href']} for d in divs]; base = "https://www.kommersant.ru"
+            
+            for item in items:
+                title = item['title'] if isinstance(item, dict) else item.get_text(strip=True)
+                link = item['href'] if isinstance(item, dict) else base + item['href']
+                
+                # Фильтр только по заголовку для скорости
+                if not any(re.search(kw, title.lower()) for kw in KEYWORDS): continue
+                if link in [row[0] for row in cursor.execute("SELECT url FROM news")]: continue
+                
+                analysis = "🚨 Обнаружена новость по ключевым словам."
+                cursor.execute("INSERT INTO news VALUES (NULL, ?)", (link,)); conn.commit()
+                all_articles.append({"title": title, "url": link, "analysis": analysis})
+        except Exception as e: 
+            logging.error(f"Ошибка сбора {source['name']}: {e}")
+
+    # Отправка отчета
+    message = "📄 Отчет чист." if not all_articles else "\n".join([f"{i}. {it['title']}\n{it['url']}" for i, it in enumerate(all_articles, 1)])
+    
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    
+    try:
+        resp = requests.post(api_url, params=payload, timeout=10)
+        print(f"Ссылка запроса: {resp.request.url}") # Для отладки
+        
+        if resp.status_code == 200:
+            logging.info("SUCCESS: Успешная доставка!")
+        else:
+            logging.error(f"CRITICAL FAIL: HTTP {resp.status_code} | Ответ: {resp.text}")
+    except Exception as e:
+        logging.error(f"EXCEPTION during sending: {e}")
+
+    conn.close()
+    logging.info("=== ФИНИШ РАБОТЫ ===")
+
+if __name__ == "__main__":
+    job()
