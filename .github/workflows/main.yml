@@ -8,13 +8,52 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+    
     steps:
+      # Проверяем код
       - uses: actions/checkout@v4
-      - name: Setup Python
+
+      # Восстанавливаем базу данных из прошлого раза, если она есть
+      - name: Restore news database cache
+        id: cache-news
+        uses: actions/cache@v4
+        with:
+          path: news_archive.db
+          key: <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mrow><mi>r</mi><mi>u</mi><mi>n</mi><mi>n</mi><mi>e</mi><mi>r</mi><mi mathvariant="normal">.</mi><mi>o</mi><mi>s</mi></mrow><mo>−</mo><mi>n</mi><mi>e</mi><mi>w</mi><mi>s</mi><mo>−</mo></mrow><annotation encoding="application/x-tex">{{ runner.os }}-news-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6667em;vertical-align:-0.0833em;"></span><span class="mord"><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="mord mathnormal">u</span><span class="mord mathnormal">nn</span><span class="mord mathnormal" style="margin-right:0.02778em;">er</span><span class="mord">.</span><span class="mord mathnormal">os</span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.6667em;vertical-align:-0.0833em;"></span><span class="mord mathnormal">n</span><span class="mord mathnormal">e</span><span class="mord mathnormal" style="margin-right:0.02691em;">w</span><span class="mord mathnormal">s</span><span class="mord">−</span></span></span></span>{{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-news-
+
+      # Настройка Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install deps
+
+      # Установка библиотек
+      - name: Install dependencies
         run: pip install requests beautifulsoup4
-      - name: Run bot
+
+      # Запуск нашего бота
+      - name: Run the bot script
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }} # Вернем использование секретов ради безопасности
+          TG_CHAT_ID: "-1004421613528"
         run: python main.py
+
+      # Сохраняем обновленную базу данных для следующего запуска
+      - name: Save news database for next time
+        if: always() # Выполняется даже если бот упал с ошибкой
+        uses: actions/cache@v4
+        with:
+          path: news_archive.db
+          key: <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mrow><mi>r</mi><mi>u</mi><mi>n</mi><mi>n</mi><mi>e</mi><mi>r</mi><mi mathvariant="normal">.</mi><mi>o</mi><mi>s</mi></mrow><mo>−</mo><mi>n</mi><mi>e</mi><mi>w</mi><mi>s</mi><mo>−</mo></mrow><annotation encoding="application/x-tex">{{ runner.os }}-news-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6667em;vertical-align:-0.0833em;"></span><span class="mord"><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="mord mathnormal">u</span><span class="mord mathnormal">nn</span><span class="mord mathnormal" style="margin-right:0.02778em;">er</span><span class="mord">.</span><span class="mord mathnormal">os</span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.6667em;vertical-align:-0.0833em;"></span><span class="mord mathnormal">n</span><span class="mord mathnormal">e</span><span class="mord mathnormal" style="margin-right:0.02691em;">w</span><span class="mord mathnormal">s</span><span class="mord">−</span></span></span></span>{{ github.run_id }}
+          
+      # Упаковываем логи и базу в архив, чтобы мы могли скачать их вручную и посмотреть
+      - name: Upload logs and DB as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-run-data
+          path: |
+            news_archive.db
+            /tmp/*.log 
