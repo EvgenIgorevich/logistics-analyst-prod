@@ -15,7 +15,7 @@ NEWS_SOURCES = [
 ]
 
 KEYWORDS = ["санкц", "запрет", "ограничение", "таможн", "фрахт", "логист", "поставк", "границ", "перевозк", "контейнер", "дефицит", "эмбарго", "swift", "расчет", "конфликт", "закрыт", "блокад"]
-DB_PATH = "/tmp/logistics_news.db"
+DB_PATH = "news_archive.db"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 conn = sqlite3.connect(DB_PATH)
