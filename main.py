@@ -125,37 +125,64 @@ def job():
     """Основная задача сбора данных."""
     logging.info("Запуск еженедельной задачи...")
     all_articles = []
+    
+    # --- ЭТАП 1: СБОР ССЫЛОК ---
     for s in NEWS_SOURCES:
-        all_articles.extend(fetch_news_from_source(s))
-        
+        try:
+            r = requests.get(s['url'], timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+            soup = BeautifulSoup(r.text, 'html.parser')
+            
+            items = []
+            if "rbc.ru" in s['url']:
+                items = soup.find_all("a", class_="news-feed__item__link")
+                base = "https://www.rbc.ru"
+            elif "kommersant.ru" in s['url']:
+                divs = soup.find_all("div", class_="article__preview")
+                items = [{"title": d.find("h2").find("a").get_text(strip=True), "href": d.find("h2").find("a")['href']} for d in divs]
+                base = "https://www.kommersant.ru"
+
+            print(f"--- НАЙДЕНО {len(items)} статей на {s['name']} ---") # ДЕБАГ-ЛОГ
+            for item in items:
+                title = item['title'] if isinstance(item, dict) else item.get_text(strip=True)
+                link = item['href'] if isinstance(item, dict) else base + item['href']
+                
+                # Фильтр по ключевым словам только в заголовке
+                if any(re.search(kw, title.lower()) for kw in KEYWORDS):
+                    all_articles.append({"title": title, "url": link})
+                    print(f"ПОДОШЛА: {title}") # ДЕБАГ-ЛОГ
+                    
+        except Exception as e:
+            logging.error(f"Ошибка доступа к {s['name']}: {e}")
+
+    # Если нет подходящих статей - выходим раньше времени
+    if not all_articles:
+        logging.info("Статей с ключевыми словами не найдено.")
+        send_telegram_report([]) # Отправит "Отчет чист"
+        return 
+
+    # --- ЭТАП 2: ПРОВЕРКА БАЗЫ И АНАЛИЗ ---
     report_items = []
+    cursor.execute('''CREATE TABLE IF NOT EXISTS news (id INTEGER PRIMARY KEY, url TEXT UNIQUE)'''); conn.commit()
+    
     for a in all_articles:
-        # Проверяем заголовок на наличие ключевых слов кризиса
-        if not any(re.search(kw, a['title'].lower()) for kw in KEYWORDS):
-             continue
-             
-        # Проверяем, нет ли такой новости в нашей базе
-        if not is_new_article(a['url'], a['title']):
+        # ВНИМАНИЕ: Здесь мы проверяем ТОЛЬКО URL, так как название может меняться
+        cursor.execute("SELECT 1 FROM news WHERE url=?", (a['url'],))
+        if cursor.fetchone():
+            print(f"ДУБЛИКАТ ПРОПУЩЕН: {a['url']}")
             continue
             
+        print(f"НОВАЯ СТАТЬЯ ОБРАБАТЫВАЕТСЯ: {a['title']}")
+        
         try:
             r = requests.get(a['url'], timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
             soup = BeautifulSoup(r.text, 'html.parser')
-            
-            paragraphs = []
-            if "rbc.ru" in a['url']:
-                paragraphs = soup.find_all("p", class_="article__text__paragraph")
-            elif "kommersant.ru" in a['url']:
-                paragraphs = soup.find_all("div", itemprop="articleBody")
-                
+            paragraphs = soup.find_all("p", class_="article__text__paragraph") if "rbc.ru" in a['url'] else soup.find_all("div", itemprop="articleBody")
             full_text = "\n".join([p.get_text(strip=True) for p in paragraphs])
             
             analysis = analyze_impact(a['title'], full_text)
             
-            # Сохраняем новость в базу
-            cursor.execute("INSERT INTO news VALUES (NULL, ?, ?, ?, ?, ?, ?)", 
-                         (a['url'].split('/')[2], a['url'], a['title'], full_text[:500], datetime.now().isoformat(), datetime.now().isoformat()))
-            conn.commit()
+            # Сохраняем ссылку, чтобы не прислать её дважды в будущем
+            cursor.execute("INSERT INTO news VALUES (NULL, ?)", (a['url'],)); conn.commit()
             
             report_items.append({
                 "title": a['title'],
@@ -163,7 +190,7 @@ def job():
                 "analysis": analysis
             })
         except Exception as e:
-            logging.error(f"Ошибка обработки статьи {a['url']}: {e}")
+            logging.error(f"Ошибка обработки текста {a['url']}: {e}")
             continue
             
     send_telegram_report(report_items)
