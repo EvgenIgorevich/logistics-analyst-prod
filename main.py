@@ -1,17 +1,18 @@
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup # Эту строку можно удалить, она больше не нужна!
 import sqlite3
 from datetime import datetime
 import logging
 import re
+import xml.etree.ElementTree as ET # Добавляем модуль для чтения XML/RSS
 
 # --- 1. НАСТРОЙКА ---
 TELEGRAM_TOKEN = "8753776194:AAHzwXLTApxGh4J_LAgCGLneDcpd8aEnIsg"
 TG_CHAT_ID = "-1004421613528"
-
+# МЕНЯЕМ URL НА АДРЕСА RSS-ЛЕНТ
 NEWS_SOURCES = [
-    {"name": "РБК Транспорт", "url": "https://www.rbc.ru/tags/?tag=%D0%BB%D0%BE%D0%B3%D0%B8%D1%81%D1%82%D0%B8%D0%BA%D0%B0-%D0%B8-%D1%82%D1%80%D0%B0%D0%BD%D1%81%D0%BF%D0%BE%D1%80%D1%82"},
-    {"name": "Коммерсантъ Транспорт", "url": "https://www.kommersant.ru/transport"}
+    {"name": "РБК Транспорт", "url": "https://www.rbc.ru/rss/transport/"}, 
+    {"name": "Коммерсантъ Транспорт", "url": "https://www.kommersant.ru/rss/transport.xml"}
 ]
 
 KEYWORDS = ["санкц", "запрет", "ограничение", "таможн", "фрахт", "логист", "поставк", "границ", "перевозк", "контейнер", "дефицит", "эмбарго", "swift", "расчет", "конфликт", "закрыт", "блокад"]
@@ -20,36 +21,40 @@ DB_PATH = "news_archive.db"
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
-cursor.execute('''CREATE TABLE IF NOT EXISTS news 
-                  (id INTEGER PRIMARY KEY, source TEXT, url TEXT UNIQUE, title TEXT, summary TEXT, published_date TEXT, added_date TEXT)''')
+cursor.execute('''CREATE TABLE IF NOT EXISTS news (id INTEGER PRIMARY KEY, source TEXT, url TEXT UNIQUE, title TEXT)''')
 conn.commit()
 
 def fetch_news_from_source(source):
-    """Собирает статьи с одного источника."""
+    """Собирает статьи из RSS-ленты."""
     articles = []
-    base_url = ""
-    if "rbc.ru" in source['url']: base_url = "https://www.rbc.ru"
-    elif "kommersant.ru" in source['url']: base_url = "https://www.kommersant.ru"
-    
     try:
-        response = requests.get(source['url'], timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
-        soup = BeautifulSoup(response.text, 'html.parser')
+        response = requests.get(source['url'], timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        response.raise_for_status() # Проверка, скачался ли файл
         
-        if "rbc.ru" in source['url']:
-            items = soup.find_all("a", class_="news-feed__item__link")
-            for item in items:
-                link = base_url + item['href']
-                title = item.get_text(strip=True)
-                articles.append({"title": title, "url": link})
-        elif "kommersant.ru" in source['url']:
-            items = soup.find_all("div", class_="article__preview")
-            for item in items:
-                t_elem = item.find("h2", class_="article__title").find("a")
-                if t_elem:
-                    articles.append({"title": t_elem.get_text(strip=True), "url": base_url + t_elem['href']})
+        # Парсим XML как дерево
+        root = ET.fromstring(response.text)
+        
+        # Ищем все блоки <item>
+        for item in root.findall('.//item'):
+            title_elem = item.find('title')
+            link_elem = item.find('link')
+            
+            if title_elem is not None and link_elem is not None:
+                title = title_elem.text.strip()
+                link = link_elem.text.strip()
+                
+                # Фильтр по ключевым словам сразу при чтении ленты
+                if any(re.search(kw, title.lower()) for kw in KEYWORDS):
+                    articles.append({"title": title, "url": link})
+                    
     except Exception as e:
-        logging.error(f"Ошибка доступа к {source['name']}: {e}")
+        logging.error(f"Ошибка доступа к ленте {source['name']}: {e}")
+        
     return articles
+
+# Остальные функции (is_new_article, analyze_impact, send_telegram_report, job) ОСТАЮТСЯ ПРЕЖНИМИ
+# Просто убедитесь, что они есть ниже этого блока.
+# ... ваш код функций ...
 
 def is_new_article(url, title):
     """Проверяет по базе, была ли новость уже сохранена."""
